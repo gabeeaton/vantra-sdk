@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vantra"
+version = "0.1.0"
+description = "Observability SDK for AI agents — traces, costs, and alerts in 3 lines of code."
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+authors = [{ name = "Vantra", email = "hello@vantra.io" }]
+keywords = ["observability", "llm", "ai", "agents", "tracing", "openai", "anthropic"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.8",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Software Development :: Libraries",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = ["httpx>=0.24.0"]
+
+[project.urls]
+Homepage = "https://vantra.io"
+Documentation = "https://vantra.io/docs"
+Repository = "https://github.com/vantra-io/vantra-python"
+"Bug Tracker" = "https://github.com/vantra-io/vantra-python/issues"
+
+[project.optional-dependencies]
+dev = ["pytest", "build", "twine"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["vantra*"]
