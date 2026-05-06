@@ -254,7 +254,7 @@ function patchOpenAI(): void {
       let response: Record<string, unknown> | null = null
 
       try {
-        response = await original.apply(this, args)
+        response = await original.apply(this, args) as Record<string, unknown>
         return response
       } catch (e) {
         status = 'error'
@@ -300,11 +300,14 @@ function patchOpenAI(): void {
 
 function patchAnthropic(): void {
   try {
-    const anthropicModule = require('anthropic')
-    const Messages = anthropicModule?.Anthropic?.Messages ?? anthropicModule?.default?.Messages
+    let anthropicModule: unknown
+    try { anthropicModule = require('anthropic') } catch { /* try alternate name */ }
+    if (!anthropicModule) try { anthropicModule = require('@anthropic-ai/sdk') } catch { return }
+    const mod = anthropicModule as Record<string, { Messages?: { prototype: Record<string, unknown> } }>
+    const Messages = mod?.Anthropic?.Messages ?? mod?.default?.Messages
     if (!Messages) return
-    const original = Messages.prototype.create
-    if (!original || (original as { __vantra?: boolean }).__vantra) return
+    const original = Messages.prototype.create as ((...a: unknown[]) => unknown) & { __vantra?: boolean }
+    if (!original || original.__vantra) return
 
     const patched = async function (this: unknown, ...args: unknown[]) {
       const kwargs = args[0] as Record<string, unknown>
@@ -314,7 +317,7 @@ function patchAnthropic(): void {
       let response: Record<string, unknown> | null = null
 
       try {
-        response = await original.apply(this, args)
+        response = await original.apply(this, args) as Record<string, unknown>
         return response
       } catch (e) {
         status = 'error'
@@ -354,7 +357,7 @@ function patchAnthropic(): void {
       }
     };
     (patched as { __vantra?: boolean }).__vantra = true
-    Messages.prototype.create = patched
+    Messages.prototype.create = patched as unknown as Record<string, unknown>
   } catch { /* anthropic not installed */ }
 }
 

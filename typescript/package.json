@@ -1,6 +1,6 @@
 {
   "name": "vantra-sdk",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "AI agent observability — traces, costs, and anomaly alerts in 3 lines of code",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -28,6 +28,7 @@
   },
   "homepage": "https://vantra.dev",
   "devDependencies": {
+    "anthropic": "^0.0.0",
     "typescript": "^5.0.0"
   },
   "peerDependencies": {
@@ -41,5 +42,8 @@
     "anthropic": {
       "optional": true
     }
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.95.0"
   }
 }

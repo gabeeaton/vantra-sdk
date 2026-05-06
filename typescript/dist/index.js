@@ -267,8 +267,20 @@ function patchOpenAI() {
 function patchAnthropic() {
     var _a, _b, _c;
     try {
-        const anthropicModule = require('anthropic');
-        const Messages = (_b = (_a = anthropicModule === null || anthropicModule === void 0 ? void 0 : anthropicModule.Anthropic) === null || _a === void 0 ? void 0 : _a.Messages) !== null && _b !== void 0 ? _b : (_c = anthropicModule === null || anthropicModule === void 0 ? void 0 : anthropicModule.default) === null || _c === void 0 ? void 0 : _c.Messages;
+        let anthropicModule;
+        try {
+            anthropicModule = require('anthropic');
+        }
+        catch ( /* try alternate name */_d) { /* try alternate name */ }
+        if (!anthropicModule)
+            try {
+                anthropicModule = require('@anthropic-ai/sdk');
+            }
+            catch (_e) {
+                return;
+            }
+        const mod = anthropicModule;
+        const Messages = (_b = (_a = mod === null || mod === void 0 ? void 0 : mod.Anthropic) === null || _a === void 0 ? void 0 : _a.Messages) !== null && _b !== void 0 ? _b : (_c = mod === null || mod === void 0 ? void 0 : mod.default) === null || _c === void 0 ? void 0 : _c.Messages;
         if (!Messages)
             return;
         const original = Messages.prototype.create;
@@ -326,7 +338,7 @@ function patchAnthropic() {
         patched.__vantra = true;
         Messages.prototype.create = patched;
     }
-    catch ( /* anthropic not installed */_d) { /* anthropic not installed */ }
+    catch ( /* anthropic not installed */_f) { /* anthropic not installed */ }
 }
 function randomId() {
     return Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
