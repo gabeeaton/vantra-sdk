@@ -100,36 +100,53 @@ function trace(fn, options) {
         let status = 'ok';
         let errorMsg = null;
         const store = { traceId, spans: [] };
+        const finish = () => {
+            const end = Date.now();
+            const collected = store.spans;
+            const totalTokens = collected.reduce((s, sp) => { var _a, _b; return s + ((_a = sp.input_tokens) !== null && _a !== void 0 ? _a : 0) + ((_b = sp.output_tokens) !== null && _b !== void 0 ? _b : 0); }, 0);
+            const totalCost = collected.reduce((s, sp) => { var _a; return s + ((_a = sp.cost_usd) !== null && _a !== void 0 ? _a : 0); }, 0);
+            post('/traces', {
+                trace_id: traceId,
+                name: traceName,
+                project: config.project,
+                start_time: start / 1000,
+                end_time: end / 1000,
+                duration_ms: end - start,
+                status,
+                error_message: errorMsg,
+                total_tokens: totalTokens,
+                total_cost_usd: totalCost,
+            });
+            if (collected.length)
+                post('/spans', collected);
+        };
         const run = () => {
             let result;
+            let syncErr = undefined;
             try {
                 result = fn.apply(this, args);
             }
             catch (e) {
+                syncErr = e;
                 status = 'error';
                 errorMsg = e instanceof Error ? e.message : String(e);
-                throw e;
             }
-            finally {
-                const end = Date.now();
-                const collected = store.spans;
-                const totalTokens = collected.reduce((s, sp) => { var _a, _b; return s + ((_a = sp.input_tokens) !== null && _a !== void 0 ? _a : 0) + ((_b = sp.output_tokens) !== null && _b !== void 0 ? _b : 0); }, 0);
-                const totalCost = collected.reduce((s, sp) => { var _a; return s + ((_a = sp.cost_usd) !== null && _a !== void 0 ? _a : 0); }, 0);
-                post('/traces', {
-                    trace_id: traceId,
-                    name: traceName,
-                    project: config.project,
-                    start_time: start / 1000,
-                    end_time: end / 1000,
-                    duration_ms: end - start,
-                    status,
-                    error_message: errorMsg,
-                    total_tokens: totalTokens,
-                    total_cost_usd: totalCost,
-                });
-                if (collected.length)
-                    post('/spans', collected);
+            if (syncErr !== undefined) {
+                finish();
+                throw syncErr;
             }
+            // Async function — wait for the promise before posting
+            if (result !== null && result !== undefined && typeof result.then === 'function') {
+                return result
+                    .catch((e) => {
+                    status = 'error';
+                    errorMsg = e instanceof Error ? e.message : String(e);
+                    throw e;
+                })
+                    .finally(finish);
+            }
+            // Synchronous function
+            finish();
             return result;
         };
         if (asyncLocalStorage) {

@@ -128,33 +128,51 @@ export function trace<T extends (...args: unknown[]) => unknown>(
 
     const store = { traceId, spans: [] as SpanData[] }
 
-    const run = () => {
+    const finish = () => {
+      const end = Date.now()
+      const collected = store.spans
+      const totalTokens = collected.reduce((s, sp) => s + (sp.input_tokens ?? 0) + (sp.output_tokens ?? 0), 0)
+      const totalCost = collected.reduce((s, sp) => s + (sp.cost_usd ?? 0), 0)
+      post('/traces', {
+        trace_id: traceId,
+        name: traceName,
+        project: config.project,
+        start_time: start / 1000,
+        end_time: end / 1000,
+        duration_ms: end - start,
+        status,
+        error_message: errorMsg,
+        total_tokens: totalTokens,
+        total_cost_usd: totalCost,
+      })
+      if (collected.length) post('/spans', collected)
+    }
+
+    const run = (): unknown => {
       let result: unknown
+      let syncErr: unknown = undefined
       try {
         result = fn.apply(this, args)
       } catch (e) {
+        syncErr = e
         status = 'error'
         errorMsg = e instanceof Error ? e.message : String(e)
-        throw e
-      } finally {
-        const end = Date.now()
-        const collected = store.spans
-        const totalTokens = collected.reduce((s, sp) => s + (sp.input_tokens ?? 0) + (sp.output_tokens ?? 0), 0)
-        const totalCost = collected.reduce((s, sp) => s + (sp.cost_usd ?? 0), 0)
-        post('/traces', {
-          trace_id: traceId,
-          name: traceName,
-          project: config.project,
-          start_time: start / 1000,
-          end_time: end / 1000,
-          duration_ms: end - start,
-          status,
-          error_message: errorMsg,
-          total_tokens: totalTokens,
-          total_cost_usd: totalCost,
-        })
-        if (collected.length) post('/spans', collected)
       }
+      if (syncErr !== undefined) { finish(); throw syncErr }
+
+      // Async function — wait for the promise before posting
+      if (result !== null && result !== undefined && typeof (result as Promise<unknown>).then === 'function') {
+        return (result as Promise<unknown>)
+          .catch((e: unknown) => {
+            status = 'error'
+            errorMsg = e instanceof Error ? e.message : String(e)
+            throw e
+          })
+          .finally(finish)
+      }
+
+      // Synchronous function
+      finish()
       return result
     }
 

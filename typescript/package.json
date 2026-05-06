@@ -1,15 +1,25 @@
 {
   "name": "vantra-sdk",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "AI agent observability — traces, costs, and anomaly alerts in 3 lines of code",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc",
     "prepublishOnly": "npm run build"
   },
-  "keywords": ["ai", "observability", "llm", "agents", "tracing", "openai", "anthropic"],
+  "keywords": [
+    "ai",
+    "observability",
+    "llm",
+    "agents",
+    "tracing",
+    "openai",
+    "anthropic"
+  ],
   "author": "Gabe Eaton",
   "license": "MIT",
   "repository": {
@@ -21,11 +31,15 @@
     "typescript": "^5.0.0"
   },
   "peerDependencies": {
-    "openai": ">=4.0.0",
-    "anthropic": ">=0.20.0"
+    "anthropic": ">=0.20.0",
+    "openai": "^6.36.0"
   },
   "peerDependenciesMeta": {
-    "openai": { "optional": true },
-    "anthropic": { "optional": true }
+    "openai": {
+      "optional": true
+    },
+    "anthropic": {
+      "optional": true
+    }
   }
 }
