@@ -1,5 +1,7 @@
 README.md
 pyproject.toml
+tests/test_integration.py
+tests/test_sdk.py
 vantra/__init__.py
 vantra/_costs.py
 vantra.egg-info/PKG-INFO
