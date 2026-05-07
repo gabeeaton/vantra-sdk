@@ -4,6 +4,8 @@ Open source SDKs for [Vantra](https://vantra.dev) — AI agent observability wit
 
 ## Python
 
+[![PyPI version](https://img.shields.io/pypi/v/vantra)](https://pypi.org/project/vantra/)
+
 ```bash
 pip install vantra
 ```
@@ -14,11 +16,13 @@ import vantra
 vantra.init(api_key="van_live_...", project="my-agent")
 
 @vantra.trace
-def run_agent(message):
+def run_agent(message: str):
     return agent.run(message)  # your existing code
 ```
 
 ## Node.js / TypeScript
+
+[![npm version](https://img.shields.io/npm/v/vantra-sdk)](https://www.npmjs.com/package/vantra-sdk)
 
 ```bash
 npm install vantra-sdk

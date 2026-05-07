@@ -10,8 +10,8 @@ const config = {
     apiKey: null,
     project: null,
     enabled: true,
+    captureIo: true,
 };
-// AsyncLocalStorage for trace context (Node.js 12.17+)
 let asyncLocalStorage = null;
 try {
     const { AsyncLocalStorage } = require('async_hooks');
@@ -74,11 +74,25 @@ function truncate(data, maxChars = 2000) {
         return String(data).slice(0, maxChars);
     }
 }
+// Proxy the original stream so all SDK methods (.controller, .toReadableStream(), etc.)
+// remain accessible while iteration flows through our tracking generator.
+function _proxyStream(original, gen) {
+    return new Proxy(original, {
+        get(target, prop) {
+            if (prop === Symbol.asyncIterator) {
+                return () => gen[Symbol.asyncIterator]();
+            }
+            const val = target[prop];
+            return typeof val === 'function' ? val.bind(target) : val;
+        },
+    });
+}
 function init(options) {
-    var _a;
+    var _a, _b;
     config.apiKey = options.apiKey;
     config.project = options.project;
     config.enabled = (_a = options.enabled) !== null && _a !== void 0 ? _a : true;
+    config.captureIo = (_b = options.captureIo) !== null && _b !== void 0 ? _b : true;
     if (!flushTimer) {
         flushTimer = setInterval(flush, 500);
         if (flushTimer.unref)
@@ -92,6 +106,7 @@ function init(options) {
 function trace(fn, options) {
     var _a, _b;
     const traceName = (_b = (_a = options === null || options === void 0 ? void 0 : options.name) !== null && _a !== void 0 ? _a : fn.name) !== null && _b !== void 0 ? _b : 'trace';
+    const promptVersion = (options === null || options === void 0 ? void 0 : options.promptVersion) ? String(options.promptVersion).slice(0, 100) : undefined;
     const wrapped = function (...args) {
         if (!config.enabled)
             return fn.apply(this, args);
@@ -116,6 +131,7 @@ function trace(fn, options) {
                 error_message: errorMsg,
                 total_tokens: totalTokens,
                 total_cost_usd: totalCost,
+                ...(promptVersion ? { prompt_version: promptVersion } : {}),
             });
             if (collected.length)
                 post('/spans', collected);
@@ -135,7 +151,6 @@ function trace(fn, options) {
                 finish();
                 throw syncErr;
             }
-            // Async function — wait for the promise before posting
             if (result !== null && result !== undefined && typeof result.then === 'function') {
                 return result
                     .catch((e) => {
@@ -145,7 +160,6 @@ function trace(fn, options) {
                 })
                     .finally(finish);
             }
-            // Synchronous function
             finish();
             return result;
         };
@@ -200,6 +214,7 @@ async function span(name, fn, options) {
         });
     }
 }
+// ─── OpenAI patch ─────────────────────────────────────────────────────────────
 function patchOpenAI() {
     var _a, _b, _c, _d, _e;
     try {
@@ -212,8 +227,28 @@ function patchOpenAI() {
             return;
         const patched = async function (...args) {
             var _a, _b, _c, _d, _e, _f, _g, _h;
-            const kwargs = args[0];
+            let kwargs = args[0];
             const start = Date.now();
+            const model = (_a = kwargs === null || kwargs === void 0 ? void 0 : kwargs.model) !== null && _a !== void 0 ? _a : 'unknown';
+            const messages = (_b = kwargs === null || kwargs === void 0 ? void 0 : kwargs.messages) !== null && _b !== void 0 ? _b : [];
+            const captureIo = config.captureIo;
+            if (kwargs === null || kwargs === void 0 ? void 0 : kwargs.stream) {
+                if (!kwargs.stream_options) {
+                    kwargs = { ...kwargs, stream_options: { include_usage: true } };
+                    args = [kwargs, ...args.slice(1)];
+                }
+                let rawStream;
+                try {
+                    rawStream = await original.apply(this, args);
+                }
+                catch (e) {
+                    queueSpan(_openaiErrorSpan(model, messages, captureIo, start, e instanceof Error ? e.message : String(e)));
+                    throw e;
+                }
+                const gen = _trackOpenAIStream(rawStream, start, model, messages, captureIo);
+                return _proxyStream(rawStream, gen);
+            }
+            // Non-streaming
             let status = 'ok';
             let errorMsg = null;
             let response = null;
@@ -228,19 +263,18 @@ function patchOpenAI() {
             }
             finally {
                 const end = Date.now();
-                const model = (_a = kwargs === null || kwargs === void 0 ? void 0 : kwargs.model) !== null && _a !== void 0 ? _a : 'unknown';
                 let inputTokens = 0, outputTokens = 0, cost = 0;
                 const usage = response && response.usage;
                 if (usage) {
-                    inputTokens = (_b = usage.prompt_tokens) !== null && _b !== void 0 ? _b : 0;
-                    outputTokens = (_c = usage.completion_tokens) !== null && _c !== void 0 ? _c : 0;
+                    inputTokens = (_c = usage.prompt_tokens) !== null && _c !== void 0 ? _c : 0;
+                    outputTokens = (_d = usage.completion_tokens) !== null && _d !== void 0 ? _d : 0;
                     cost = (0, costs_1.calculateCost)(model, inputTokens, outputTokens);
                 }
                 const choices = response && response.choices;
-                const outputContent = (_e = (_d = choices === null || choices === void 0 ? void 0 : choices[0]) === null || _d === void 0 ? void 0 : _d.message) === null || _e === void 0 ? void 0 : _e.content;
+                const outputContent = (_f = (_e = choices === null || choices === void 0 ? void 0 : choices[0]) === null || _e === void 0 ? void 0 : _e.message) === null || _f === void 0 ? void 0 : _f.content;
                 queueSpan({
                     span_id: randomId(),
-                    trace_id: (_g = (_f = asyncLocalStorage === null || asyncLocalStorage === void 0 ? void 0 : asyncLocalStorage.getStore()) === null || _f === void 0 ? void 0 : _f.traceId) !== null && _g !== void 0 ? _g : null,
+                    trace_id: (_h = (_g = asyncLocalStorage === null || asyncLocalStorage === void 0 ? void 0 : asyncLocalStorage.getStore()) === null || _g === void 0 ? void 0 : _g.traceId) !== null && _h !== void 0 ? _h : null,
                     name: `openai.chat (${model})`,
                     kind: 'llm',
                     provider: 'openai',
@@ -254,8 +288,8 @@ function patchOpenAI() {
                     input_tokens: inputTokens,
                     output_tokens: outputTokens,
                     cost_usd: cost,
-                    input: truncate({ messages: (_h = kwargs === null || kwargs === void 0 ? void 0 : kwargs.messages) === null || _h === void 0 ? void 0 : _h.slice(-1) }),
-                    output: outputContent ? { content: outputContent.slice(0, 1000) } : undefined,
+                    input: captureIo ? truncate({ messages: messages.slice(-1) }) : undefined,
+                    output: captureIo && outputContent ? { content: outputContent.slice(0, 1000) } : undefined,
                 });
             }
         };
@@ -264,6 +298,80 @@ function patchOpenAI() {
     }
     catch ( /* openai not installed */_f) { /* openai not installed */ }
 }
+function _openaiErrorSpan(model, messages, captureIo, start, errorMsg) {
+    var _a, _b;
+    const end = Date.now();
+    return {
+        span_id: randomId(),
+        trace_id: (_b = (_a = asyncLocalStorage === null || asyncLocalStorage === void 0 ? void 0 : asyncLocalStorage.getStore()) === null || _a === void 0 ? void 0 : _a.traceId) !== null && _b !== void 0 ? _b : null,
+        name: `openai.chat (${model})`,
+        kind: 'llm',
+        provider: 'openai',
+        model,
+        project: config.project,
+        start_time: start / 1000,
+        end_time: end / 1000,
+        duration_ms: end - start,
+        status: 'error',
+        error_message: errorMsg,
+        input_tokens: 0,
+        output_tokens: 0,
+        cost_usd: 0,
+        input: captureIo ? truncate({ messages: messages.slice(-1) }) : undefined,
+        output: undefined,
+    };
+}
+async function* _trackOpenAIStream(stream, start, model, messages, captureIo) {
+    var _a, _b, _c, _d, _e, _f;
+    const contentChunks = [];
+    let inputTokens = 0, outputTokens = 0;
+    let status = 'ok';
+    let errorMsg = null;
+    try {
+        for await (const chunk of stream) {
+            const usage = chunk.usage;
+            if (usage) {
+                inputTokens = (_a = usage.prompt_tokens) !== null && _a !== void 0 ? _a : 0;
+                outputTokens = (_b = usage.completion_tokens) !== null && _b !== void 0 ? _b : 0;
+            }
+            const choices = chunk.choices;
+            const content = (_d = (_c = choices === null || choices === void 0 ? void 0 : choices[0]) === null || _c === void 0 ? void 0 : _c.delta) === null || _d === void 0 ? void 0 : _d.content;
+            if (content)
+                contentChunks.push(content);
+            yield chunk;
+        }
+    }
+    catch (e) {
+        status = 'error';
+        errorMsg = e instanceof Error ? e.message : String(e);
+        throw e;
+    }
+    finally {
+        const end = Date.now();
+        const cost = (0, costs_1.calculateCost)(model, inputTokens, outputTokens);
+        const fullContent = contentChunks.join('');
+        queueSpan({
+            span_id: randomId(),
+            trace_id: (_f = (_e = asyncLocalStorage === null || asyncLocalStorage === void 0 ? void 0 : asyncLocalStorage.getStore()) === null || _e === void 0 ? void 0 : _e.traceId) !== null && _f !== void 0 ? _f : null,
+            name: `openai.chat (${model})`,
+            kind: 'llm',
+            provider: 'openai',
+            model,
+            project: config.project,
+            start_time: start / 1000,
+            end_time: end / 1000,
+            duration_ms: end - start,
+            status,
+            error_message: errorMsg,
+            input_tokens: inputTokens,
+            output_tokens: outputTokens,
+            cost_usd: cost,
+            input: captureIo ? truncate({ messages: messages.slice(-1) }) : undefined,
+            output: captureIo && fullContent ? { content: fullContent.slice(0, 1000) } : undefined,
+        });
+    }
+}
+// ─── Anthropic patch ──────────────────────────────────────────────────────────
 function patchAnthropic() {
     var _a, _b, _c;
     try {
@@ -290,6 +398,22 @@ function patchAnthropic() {
             var _a, _b, _c, _d, _e, _f, _g;
             const kwargs = args[0];
             const start = Date.now();
+            const model = (_a = kwargs === null || kwargs === void 0 ? void 0 : kwargs.model) !== null && _a !== void 0 ? _a : 'unknown';
+            const messages = (_b = kwargs === null || kwargs === void 0 ? void 0 : kwargs.messages) !== null && _b !== void 0 ? _b : [];
+            const captureIo = config.captureIo;
+            if (kwargs === null || kwargs === void 0 ? void 0 : kwargs.stream) {
+                let rawStream;
+                try {
+                    rawStream = await original.apply(this, args);
+                }
+                catch (e) {
+                    queueSpan(_anthropicErrorSpan(model, messages, captureIo, start, e instanceof Error ? e.message : String(e)));
+                    throw e;
+                }
+                const gen = _trackAnthropicStream(rawStream, start, model, messages, captureIo);
+                return _proxyStream(rawStream, gen);
+            }
+            // Non-streaming
             let status = 'ok';
             let errorMsg = null;
             let response = null;
@@ -304,19 +428,18 @@ function patchAnthropic() {
             }
             finally {
                 const end = Date.now();
-                const model = (_a = kwargs === null || kwargs === void 0 ? void 0 : kwargs.model) !== null && _a !== void 0 ? _a : 'unknown';
                 let inputTokens = 0, outputTokens = 0, cost = 0;
                 const usage = response && response.usage;
                 if (usage) {
-                    inputTokens = (_b = usage.input_tokens) !== null && _b !== void 0 ? _b : 0;
-                    outputTokens = (_c = usage.output_tokens) !== null && _c !== void 0 ? _c : 0;
+                    inputTokens = (_c = usage.input_tokens) !== null && _c !== void 0 ? _c : 0;
+                    outputTokens = (_d = usage.output_tokens) !== null && _d !== void 0 ? _d : 0;
                     cost = (0, costs_1.calculateCost)(model, inputTokens, outputTokens);
                 }
                 const content = response && response.content;
-                const outputText = (_d = content === null || content === void 0 ? void 0 : content[0]) === null || _d === void 0 ? void 0 : _d.text;
+                const outputText = (_e = content === null || content === void 0 ? void 0 : content[0]) === null || _e === void 0 ? void 0 : _e.text;
                 queueSpan({
                     span_id: randomId(),
-                    trace_id: (_f = (_e = asyncLocalStorage === null || asyncLocalStorage === void 0 ? void 0 : asyncLocalStorage.getStore()) === null || _e === void 0 ? void 0 : _e.traceId) !== null && _f !== void 0 ? _f : null,
+                    trace_id: (_g = (_f = asyncLocalStorage === null || asyncLocalStorage === void 0 ? void 0 : asyncLocalStorage.getStore()) === null || _f === void 0 ? void 0 : _f.traceId) !== null && _g !== void 0 ? _g : null,
                     name: `anthropic.messages (${model})`,
                     kind: 'llm',
                     provider: 'anthropic',
@@ -330,8 +453,8 @@ function patchAnthropic() {
                     input_tokens: inputTokens,
                     output_tokens: outputTokens,
                     cost_usd: cost,
-                    input: truncate({ messages: (_g = kwargs === null || kwargs === void 0 ? void 0 : kwargs.messages) === null || _g === void 0 ? void 0 : _g.slice(-1) }),
-                    output: outputText ? { text: outputText.slice(0, 1000) } : undefined,
+                    input: captureIo ? truncate({ messages: messages.slice(-1) }) : undefined,
+                    output: captureIo && outputText ? { text: outputText.slice(0, 1000) } : undefined,
                 });
             }
         };
@@ -339,6 +462,88 @@ function patchAnthropic() {
         Messages.prototype.create = patched;
     }
     catch ( /* anthropic not installed */_f) { /* anthropic not installed */ }
+}
+function _anthropicErrorSpan(model, messages, captureIo, start, errorMsg) {
+    var _a, _b;
+    const end = Date.now();
+    return {
+        span_id: randomId(),
+        trace_id: (_b = (_a = asyncLocalStorage === null || asyncLocalStorage === void 0 ? void 0 : asyncLocalStorage.getStore()) === null || _a === void 0 ? void 0 : _a.traceId) !== null && _b !== void 0 ? _b : null,
+        name: `anthropic.messages (${model})`,
+        kind: 'llm',
+        provider: 'anthropic',
+        model,
+        project: config.project,
+        start_time: start / 1000,
+        end_time: end / 1000,
+        duration_ms: end - start,
+        status: 'error',
+        error_message: errorMsg,
+        input_tokens: 0,
+        output_tokens: 0,
+        cost_usd: 0,
+        input: captureIo ? truncate({ messages: messages.slice(-1) }) : undefined,
+        output: undefined,
+    };
+}
+async function* _trackAnthropicStream(stream, start, model, messages, captureIo) {
+    var _a, _b, _c, _d;
+    const contentChunks = [];
+    let inputTokens = 0, outputTokens = 0;
+    let status = 'ok';
+    let errorMsg = null;
+    try {
+        for await (const event of stream) {
+            const eventType = event.type;
+            if (eventType === 'message_start') {
+                const msg = event.message;
+                const usage = msg === null || msg === void 0 ? void 0 : msg.usage;
+                if (usage)
+                    inputTokens = (_a = usage.input_tokens) !== null && _a !== void 0 ? _a : 0;
+            }
+            else if (eventType === 'content_block_delta') {
+                const delta = event.delta;
+                const text = delta === null || delta === void 0 ? void 0 : delta.text;
+                if (typeof text === 'string' && text)
+                    contentChunks.push(text);
+            }
+            else if (eventType === 'message_delta') {
+                const usage = event.usage;
+                if (usage)
+                    outputTokens = (_b = usage.output_tokens) !== null && _b !== void 0 ? _b : 0;
+            }
+            yield event;
+        }
+    }
+    catch (e) {
+        status = 'error';
+        errorMsg = e instanceof Error ? e.message : String(e);
+        throw e;
+    }
+    finally {
+        const end = Date.now();
+        const cost = (0, costs_1.calculateCost)(model, inputTokens, outputTokens);
+        const fullText = contentChunks.join('');
+        queueSpan({
+            span_id: randomId(),
+            trace_id: (_d = (_c = asyncLocalStorage === null || asyncLocalStorage === void 0 ? void 0 : asyncLocalStorage.getStore()) === null || _c === void 0 ? void 0 : _c.traceId) !== null && _d !== void 0 ? _d : null,
+            name: `anthropic.messages (${model})`,
+            kind: 'llm',
+            provider: 'anthropic',
+            model,
+            project: config.project,
+            start_time: start / 1000,
+            end_time: end / 1000,
+            duration_ms: end - start,
+            status,
+            error_message: errorMsg,
+            input_tokens: inputTokens,
+            output_tokens: outputTokens,
+            cost_usd: cost,
+            input: captureIo ? truncate({ messages: messages.slice(-1) }) : undefined,
+            output: captureIo && fullText ? { text: fullText.slice(0, 1000) } : undefined,
+        });
+    }
 }
 function randomId() {
     return Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
